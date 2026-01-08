@@ -6,7 +6,6 @@ use crate::device_motion::get_acceleration;
 use macroquad::prelude::*;
 
 const RADIUS: f32 = 5.;
-// const NUM_PARTICLES: usize = 2000;
 const STEPS_PER_FRAME: usize = 10;
 
 const SIGMA: f32 = 20.;
@@ -15,6 +14,8 @@ const GAMMA: f32 = 7.;
 const B: f32 = 1.5;
 
 const M: f32 = 1.;
+
+const EPS: f32 = 0.1;
 
 const DT: f32 = 1. / 60.;
 
@@ -160,8 +161,6 @@ fn update_acceleration(particles: &mut [Particle], grid: &SpatialHashGrid) {
 }
 
 fn apply_xsph(particles: &mut [Particle], grid: &SpatialHashGrid) {
-    const EPS: f32 = 0.1;
-
     let mut dv = vec![Vec2::ZERO; particles.len()];
 
     for i in 0..particles.len() {
