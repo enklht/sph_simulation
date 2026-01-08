@@ -22,9 +22,9 @@ const DT: f32 = 1. / 60.;
 struct Particle {
     pos: Vec2,
     vel: Vec2,
+    acc: Vec2,
     rho: f32,
     p: f32,
-    f: Vec2,
 }
 
 impl Particle {
@@ -133,10 +133,10 @@ fn update_pressure(particles: &mut [Particle], rho0: f32) {
     }
 }
 
-fn update_force(particles: &mut [Particle], grid: &SpatialHashGrid) {
+fn update_acceleration(particles: &mut [Particle], grid: &SpatialHashGrid) {
     for i in 0..particles.len() {
         let cell = particles[i].cell_coord();
-        let mut f = M * get_acceleration();
+        let mut a = get_acceleration();
 
         for x in cell.0.saturating_sub(1)..=cell.0 + 1 {
             for y in cell.1.saturating_sub(1)..=cell.1 + 1 {
@@ -146,7 +146,7 @@ fn update_force(particles: &mut [Particle], grid: &SpatialHashGrid) {
 
                 for &j in neighbours {
                     if i != j {
-                        f += -M
+                        a += -M
                             * (particles[i].p / particles[i].rho.powi(2)
                                 + particles[j].p / particles[j].rho.powi(2))
                             * grad_spiky(particles[i].pos - particles[j].pos)
@@ -155,7 +155,7 @@ fn update_force(particles: &mut [Particle], grid: &SpatialHashGrid) {
             }
         }
 
-        particles[i].f = f;
+        particles[i].acc = a;
     }
 }
 
@@ -230,7 +230,7 @@ async fn main() {
             let h = screen_height();
 
             for p in &mut particles {
-                p.vel += p.f * DT / 2.;
+                p.vel += p.acc * DT / 2.;
                 p.pos += p.vel * DT;
             }
 
@@ -239,12 +239,12 @@ async fn main() {
                 rho0 = particles.iter().map(|p| p.rho).sum::<f32>() / particles.len() as f32;
             }
             update_pressure(&mut particles, rho0);
-            update_force(&mut particles, &grid);
+            update_acceleration(&mut particles, &grid);
 
             apply_xsph(&mut particles, &grid);
 
             for p in &mut particles {
-                p.vel += p.f * DT / 2.;
+                p.vel += p.acc * DT / 2.;
             }
 
             handle_wall_collision(&mut particles, w, h);
