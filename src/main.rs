@@ -10,7 +10,7 @@ const STEPS_PER_FRAME: usize = 10;
 
 const SIGMA: f32 = 20.;
 
-const GAMMA: f32 = 7.;
+const GAMMA: i32 = 7;
 const B: f32 = 1.5;
 
 const M: f32 = 1.;
@@ -81,27 +81,46 @@ fn render(particles: &[Particle]) {
 }
 
 fn poly6(x: Vec2) -> f32 {
-    let r = x.length_squared();
-    if r < SIGMA.powi(2) {
-        4. / (PI * SIGMA.powi(8)) * (SIGMA.powi(2) - r).powi(3)
+    const SIGMA2: f32 = SIGMA * SIGMA;
+    const SIGMA8: f32 = SIGMA2 * SIGMA2 * SIGMA2 * SIGMA2;
+
+    let r2 = x.length_squared();
+    if r2 < SIGMA.powi(2) {
+        4. / (PI * SIGMA8) * (SIGMA2 - r2).powi(3)
     } else {
         0.
     }
 }
 
 fn grad_poly6(x: Vec2) -> Vec2 {
-    let r = x.length_squared();
-    if r < SIGMA.powi(2) {
-        -24. / (PI * SIGMA.powi(8)) * (SIGMA.powi(2) - r).powi(2) * x
+    const SIGMA2: f32 = SIGMA * SIGMA;
+    const SIGMA8: f32 = SIGMA2 * SIGMA2 * SIGMA2 * SIGMA2;
+
+    let r2 = x.length_squared();
+    if r2 < SIGMA.powi(2) {
+        -24. / (PI * SIGMA8) * (SIGMA2 - r2).powi(2) * x
     } else {
         Vec2::ZERO
     }
 }
 
+fn spiky(x: Vec2) -> f32 {
+    const SIGMA5: f32 = SIGMA * SIGMA * SIGMA * SIGMA * SIGMA;
+
+    let r = x.length();
+    if r < SIGMA {
+        10. / (PI * SIGMA5) * (SIGMA - r).powi(3)
+    } else {
+        0.
+    }
+}
+
 fn grad_spiky(x: Vec2) -> Vec2 {
+    const SIGMA5: f32 = SIGMA * SIGMA * SIGMA * SIGMA * SIGMA;
+
     let r = x.length();
     if 0. < r && r < SIGMA {
-        -30. / (PI * SIGMA.powi(5)) * (SIGMA - r).powi(2) * (x / r)
+        -30. / (PI * SIGMA5) * (SIGMA - r).powi(2) * (x / r)
     } else {
         Vec2::ZERO
     }
@@ -130,7 +149,7 @@ fn update_density(particles: &mut [Particle], grid: &SpatialHashGrid) {
 
 fn update_pressure(particles: &mut [Particle], rho0: f32) {
     for p in particles {
-        p.p = B * ((p.rho / rho0).powf(GAMMA) - 1.);
+        p.p = B * ((p.rho / rho0).powi(GAMMA) - 1.);
     }
 }
 
@@ -184,6 +203,7 @@ fn apply_xsph(particles: &mut [Particle], grid: &SpatialHashGrid) {
 
         dv[i] = EPS * corr;
     }
+
     for i in 0..particles.len() {
         particles[i].vel += dv[i];
     }
