@@ -1,9 +1,11 @@
 mod device_motion;
-
-use std::{collections::HashMap, f32::consts::PI};
+mod kernel;
 
 use crate::device_motion::get_acceleration;
+use crate::kernel::*;
 use macroquad::prelude::*;
+use rayon::prelude::*;
+use std::collections::HashMap;
 
 const RADIUS: f32 = 5.;
 const STEPS_PER_FRAME: usize = 10;
@@ -19,213 +21,194 @@ const EPS: f32 = 0.1;
 
 const DT: f32 = 1. / 60.;
 
-#[derive(Default)]
-struct Particle {
-    pos: Vec2,
-    vel: Vec2,
-    acc: Vec2,
-    rho: f32,
-    p: f32,
-}
-
-impl Particle {
-    fn cell_coord(&self) -> (usize, usize) {
-        (
-            (self.pos.x / SIGMA).round() as usize,
-            (self.pos.y / SIGMA).round() as usize,
-        )
-    }
-}
-
 type SpatialHashGrid = HashMap<(usize, usize), Vec<usize>>;
 
-fn spawn_particles(w: f32, h: f32) -> Vec<Particle> {
-    let dx = 2.0 * RADIUS * 1.5;
-    let dy = dx;
-    let pad = RADIUS * 2.0;
-
-    let cols = ((w - 2.0 * pad) / dx).floor() as usize;
-    let rows = ((h - 2.0 * pad) / 3.0 / dy).floor() as usize;
-
-    let mut particles = Vec::with_capacity(cols * rows);
-
-    for row in 0..rows {
-        for col in 0..cols {
-            let mut x = pad + col as f32 * dx;
-            let y = pad + row as f32 * dy;
-
-            // stagger every other row
-            if row % 2 == 1 {
-                x += dx * 0.5;
-            }
-
-            particles.push(Particle {
-                pos: vec2(x, y),
-                ..Default::default()
-            });
-        }
-    }
-
-    particles
+fn cell_coord(pos: &Vec2) -> (usize, usize) {
+    (
+        (pos.x / SIGMA).round() as usize,
+        (pos.y / SIGMA).round() as usize,
+    )
 }
 
-fn render(particles: &[Particle]) {
-    const BACKGROUND_COLOR: Color = Color::new(0.2, 0.2, 0.2, 1.0);
-    const WATER_COLOR: Color = Color::new(0.3, 0.85, 0.95, 0.9);
-
-    clear_background(BACKGROUND_COLOR);
-
-    for p in particles {
-        draw_circle(p.pos.x, p.pos.y, RADIUS * 2., WATER_COLOR);
-    }
+#[derive(Default)]
+struct Scene {
+    num_particles: usize,
+    grid: SpatialHashGrid,
+    rho0: f32,
+    pos: Vec<Vec2>,
+    vel: Vec<Vec2>,
+    acc: Vec<Vec2>,
+    rho: Vec<f32>,
+    p: Vec<f32>,
 }
 
-fn poly6(x: Vec2) -> f32 {
-    const SIGMA2: f32 = SIGMA * SIGMA;
-    const SIGMA8: f32 = SIGMA2 * SIGMA2 * SIGMA2 * SIGMA2;
+impl Scene {
+    fn new(w: f32, h: f32) -> Scene {
+        let space = 2.0 * RADIUS * 1.5;
+        let pad = RADIUS * 2.0;
 
-    let r2 = x.length_squared();
-    if r2 < SIGMA.powi(2) {
-        4. / (PI * SIGMA8) * (SIGMA2 - r2).powi(3)
-    } else {
-        0.
-    }
-}
+        let cols = ((w - 2.0 * pad) / space).floor() as usize;
+        let rows = ((h - 2.0 * pad) / 3.0 / space).floor() as usize;
 
-fn grad_poly6(x: Vec2) -> Vec2 {
-    const SIGMA2: f32 = SIGMA * SIGMA;
-    const SIGMA8: f32 = SIGMA2 * SIGMA2 * SIGMA2 * SIGMA2;
+        let num_particles = cols * rows;
 
-    let r2 = x.length_squared();
-    if r2 < SIGMA.powi(2) {
-        -24. / (PI * SIGMA8) * (SIGMA2 - r2).powi(2) * x
-    } else {
-        Vec2::ZERO
-    }
-}
+        let mut pos = Vec::with_capacity(num_particles);
 
-fn spiky(x: Vec2) -> f32 {
-    const SIGMA5: f32 = SIGMA * SIGMA * SIGMA * SIGMA * SIGMA;
+        for row in 0..rows {
+            for col in 0..cols {
+                let mut x = pad + col as f32 * space;
+                let y = pad + row as f32 * space;
 
-    let r = x.length();
-    if r < SIGMA {
-        10. / (PI * SIGMA5) * (SIGMA - r).powi(3)
-    } else {
-        0.
-    }
-}
-
-fn grad_spiky(x: Vec2) -> Vec2 {
-    const SIGMA5: f32 = SIGMA * SIGMA * SIGMA * SIGMA * SIGMA;
-
-    let r = x.length();
-    if 0. < r && r < SIGMA {
-        -30. / (PI * SIGMA5) * (SIGMA - r).powi(2) * (x / r)
-    } else {
-        Vec2::ZERO
-    }
-}
-
-fn update_density(particles: &mut [Particle], grid: &SpatialHashGrid) {
-    for i in 0..particles.len() {
-        let cell = particles[i].cell_coord();
-        let mut rho = 0.;
-
-        for x in cell.0.saturating_sub(1)..=cell.0 + 1 {
-            for y in cell.1.saturating_sub(1)..=cell.1 + 1 {
-                let Some(neighbours) = grid.get(&(x, y)) else {
-                    continue;
-                };
-
-                for &j in neighbours {
-                    rho += M * poly6(particles[i].pos - particles[j].pos);
+                // stagger every other row
+                if row % 2 == 1 {
+                    x += space * 0.5;
                 }
+
+                pos.push(vec2(x, y));
             }
         }
 
-        particles[i].rho = rho;
+        Scene {
+            num_particles,
+            grid: HashMap::new(),
+            rho0: 0.,
+            pos,
+            vel: vec![Vec2::ZERO; num_particles],
+            acc: vec![Vec2::ZERO; num_particles],
+            rho: vec![0.; num_particles],
+            p: vec![0.; num_particles],
+        }
     }
-}
 
-fn update_pressure(particles: &mut [Particle], rho0: f32) {
-    for p in particles {
-        p.p = B * ((p.rho / rho0).powi(GAMMA) - 1.);
+    fn update_grid(&mut self) {
+        let mut grid = SpatialHashGrid::new();
+
+        for (i, p) in self.pos.iter().enumerate() {
+            grid.entry(cell_coord(p)).or_default().push(i)
+        }
+
+        self.grid = grid;
     }
-}
 
-fn update_acceleration(particles: &mut [Particle], grid: &SpatialHashGrid) {
-    for i in 0..particles.len() {
-        let cell = particles[i].cell_coord();
-        let mut a = get_acceleration();
+    fn update_density(&mut self) {
+        self.rho.par_iter_mut().enumerate().for_each(|(i, rho)| {
+            *rho = 0.;
 
-        for x in cell.0.saturating_sub(1)..=cell.0 + 1 {
-            for y in cell.1.saturating_sub(1)..=cell.1 + 1 {
-                let Some(neighbours) = grid.get(&(x, y)) else {
-                    continue;
-                };
+            let cell = cell_coord(&self.pos[i]);
 
-                for &j in neighbours {
-                    if i != j {
-                        a += -M
-                            * (particles[i].p / particles[i].rho.powi(2)
-                                + particles[j].p / particles[j].rho.powi(2))
-                            * grad_spiky(particles[i].pos - particles[j].pos)
+            for x in cell.0.saturating_sub(1)..=cell.0 + 1 {
+                for y in cell.1.saturating_sub(1)..=cell.1 + 1 {
+                    let Some(neighbours) = self.grid.get(&(x, y)) else {
+                        continue;
+                    };
+
+                    for &j in neighbours {
+                        *rho += M * poly6(self.pos[i] - self.pos[j]);
                     }
                 }
             }
+        });
+
+        if self.rho0 == 0. {
+            self.rho0 = self.rho.iter().sum::<f32>() / self.num_particles as f32;
         }
-
-        particles[i].acc = a;
     }
-}
 
-fn apply_xsph(particles: &mut [Particle], grid: &SpatialHashGrid) {
-    let mut dv = vec![Vec2::ZERO; particles.len()];
+    fn update_pressure(&mut self) {
+        for i in 0..self.num_particles {
+            self.p[i] = B * ((self.rho[i] / self.rho0).powi(GAMMA) - 1.);
+        }
+    }
 
-    for i in 0..particles.len() {
-        let cell = particles[i].cell_coord();
-        let mut corr = Vec2::ZERO;
+    fn update_acceleration(&mut self) {
+        let base_acc = get_acceleration();
 
-        for x in cell.0.saturating_sub(1)..=cell.0 + 1 {
-            for y in cell.1.saturating_sub(1)..=cell.1 + 1 {
-                let Some(neighbours) = grid.get(&(x, y)) else {
-                    continue;
-                };
-                for &j in neighbours {
-                    if i != j {
-                        let r = particles[i].pos - particles[j].pos;
-                        corr +=
-                            M * (particles[j].vel - particles[i].vel) / particles[i].rho * poly6(r);
+        self.acc.par_iter_mut().enumerate().for_each(|(i, acc)| {
+            *acc = base_acc;
+
+            let cell = cell_coord(&self.pos[i]);
+
+            for x in cell.0.saturating_sub(1)..=cell.0 + 1 {
+                for y in cell.1.saturating_sub(1)..=cell.1 + 1 {
+                    let Some(neighbours) = self.grid.get(&(x, y)) else {
+                        continue;
+                    };
+
+                    for &j in neighbours {
+                        if i != j {
+                            *acc += -M
+                                * (self.p[i] / self.rho[i].powi(2)
+                                    + self.p[j] / self.rho[j].powi(2))
+                                * grad_spiky(self.pos[i] - self.pos[j])
+                        }
                     }
                 }
             }
-        }
-
-        dv[i] = EPS * corr;
+        });
     }
 
-    for i in 0..particles.len() {
-        particles[i].vel += dv[i];
-    }
-}
+    fn apply_xsph(&mut self) {
+        let dv = (0..self.num_particles)
+            .into_par_iter()
+            .map(|i| {
+                let mut corr = Vec2::ZERO;
+                let cell = cell_coord(&self.pos[i]);
 
-fn handle_wall_collision(particles: &mut [Particle], w: f32, h: f32) {
-    for p in particles {
-        if p.pos.x < RADIUS {
-            p.pos.x = RADIUS;
-            p.vel.x = 0.;
+                for x in cell.0.saturating_sub(1)..=cell.0 + 1 {
+                    for y in cell.1.saturating_sub(1)..=cell.1 + 1 {
+                        let Some(neighbours) = self.grid.get(&(x, y)) else {
+                            continue;
+                        };
+
+                        for &j in neighbours {
+                            if i != j {
+                                let r = self.pos[i] - self.pos[j];
+                                corr += M * (self.vel[j] - self.vel[i]) / self.rho[i] * poly6(r);
+                            }
+                        }
+                    }
+                }
+
+                EPS * corr
+            })
+            .collect::<Vec<_>>();
+
+        for i in 0..self.num_particles {
+            self.vel[i] += dv[i];
         }
-        if p.pos.x > w - RADIUS {
-            p.pos.x = w - RADIUS;
-            p.vel.x = 0.;
+    }
+
+    fn handle_wall_collision(&mut self, w: f32, h: f32) {
+        for i in 0..self.num_particles {
+            let pos = &mut self.pos[i];
+            let vel = &mut self.vel[i];
+            if pos.x < RADIUS {
+                pos.x = RADIUS;
+                vel.x = 0.;
+            }
+            if pos.x > w - RADIUS {
+                pos.x = w - RADIUS;
+                vel.x = 0.;
+            }
+            if pos.y < RADIUS {
+                pos.y = RADIUS;
+                vel.y = 0.;
+            }
+            if pos.y > h - RADIUS {
+                pos.y = h - RADIUS;
+                vel.y = 0.;
+            }
         }
-        if p.pos.y < RADIUS {
-            p.pos.y = RADIUS;
-            p.vel.y = 0.;
-        }
-        if p.pos.y > h - RADIUS {
-            p.pos.y = h - RADIUS;
-            p.vel.y = 0.;
+    }
+
+    fn render(&self) {
+        const BACKGROUND_COLOR: Color = Color::new(0.2, 0.2, 0.2, 1.0);
+        const WATER_COLOR: Color = Color::new(0.3, 0.85, 0.95, 0.9);
+
+        clear_background(BACKGROUND_COLOR);
+
+        for pos in &self.pos {
+            draw_circle(pos.x, pos.y, RADIUS * 2., WATER_COLOR);
         }
     }
 }
@@ -235,41 +218,34 @@ async fn main() {
     let w = screen_width();
     let h = screen_height();
 
-    let mut particles = spawn_particles(w, h);
-    let mut rho0 = 0.;
+    let mut scene = Scene::new(w, h);
 
     loop {
         for _ in 0..STEPS_PER_FRAME {
-            let mut grid = SpatialHashGrid::new();
-            for (i, p) in particles.iter().enumerate() {
-                grid.entry(p.cell_coord()).or_default().push(i)
-            }
-
             let w = screen_width();
             let h = screen_height();
 
-            for p in &mut particles {
-                p.vel += p.acc * DT / 2.;
-                p.pos += p.vel * DT;
+            scene.update_grid();
+
+            for i in 0..scene.num_particles {
+                scene.vel[i] += scene.acc[i] * DT / 2.;
+                scene.pos[i] += scene.vel[i] * DT;
             }
 
-            update_density(&mut particles, &grid);
-            if rho0 == 0. {
-                rho0 = particles.iter().map(|p| p.rho).sum::<f32>() / particles.len() as f32;
-            }
-            update_pressure(&mut particles, rho0);
-            update_acceleration(&mut particles, &grid);
+            scene.update_density();
+            scene.update_pressure();
+            scene.update_acceleration();
 
-            apply_xsph(&mut particles, &grid);
+            scene.apply_xsph();
 
-            for p in &mut particles {
-                p.vel += p.acc * DT / 2.;
+            for i in 0..scene.num_particles {
+                scene.vel[i] += scene.acc[i] * DT / 2.;
             }
 
-            handle_wall_collision(&mut particles, w, h);
+            scene.handle_wall_collision(w, h);
         }
 
-        render(&particles);
+        scene.render();
         next_frame().await;
     }
 }
