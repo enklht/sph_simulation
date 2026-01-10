@@ -8,19 +8,20 @@ use rayon::prelude::*;
 use std::collections::HashMap;
 
 const RADIUS: f32 = 5.;
-const STEPS_PER_FRAME: usize = 1;
+const STEPS_PER_FRAME: usize = 5;
 
-const G_SCALE: f32 = 15.;
+const G_SCALE: f32 = 20.;
 // kernel size
-const H: f32 = 20.;
+const H: f32 = 25.;
 // mass
-const M: f32 = 20.;
+const M: f32 = 10.;
 // stiffness
-const K: f32 = 1.5e5;
+const K: f32 = 1e7;
 // viscosity
-const MU: f32 = 1e2;
+const MU: f32 = 1e3;
+const EPS: f32 = 0.75;
 
-const DT: f32 = 1. / 30.;
+const DT: f32 = 1. / (60. * STEPS_PER_FRAME as f32);
 
 type SpatialHashGrid = HashMap<(usize, usize), Vec<usize>>;
 
@@ -105,21 +106,6 @@ impl Scene {
                     }
                 }
             }
-
-            if *rho == 0. {
-                println!("{} at {:?}", i, cell);
-                for x in cell.0.saturating_sub(1)..=cell.0.saturating_add(1) {
-                    for y in cell.1.saturating_sub(1)..=cell.1.saturating_add(1) {
-                        let Some(neighbours) = self.grid.get(&(x, y)) else {
-                            continue;
-                        };
-
-                        println!("{}, {}: {:?}", x, y, neighbours);
-                    }
-                }
-
-                panic!()
-            }
         });
 
         if self.rho0 == 0. {
@@ -147,10 +133,15 @@ impl Scene {
                     };
 
                     for &j in neighbours {
-                        *f += -M * (self.p[i] + self.p[j]) / (2. * self.rho[j])
-                            * grad_spiky(self.pos[i] - self.pos[j]);
-                        *f += MU * M * (self.vel[j] - self.vel[i]) / self.rho[j]
-                            * lap_visc(self.pos[i] - self.pos[j]);
+                        if i != j {
+                            // Pressure force
+                            *f += -M * (self.p[i] + self.p[j]) / (2. * self.rho[j])
+                                * grad_spiky(self.pos[i] - self.pos[j]);
+
+                            // Viscosity force
+                            *f += MU * M * (self.vel[j] - self.vel[i]) / self.rho[j]
+                                * lap_visc(self.pos[i] - self.pos[j]);
+                        }
                     }
                 }
             }
@@ -158,8 +149,6 @@ impl Scene {
     }
 
     fn apply_xsph(&mut self) {
-        const EPS: f32 = 0.5;
-
         let dv = (0..self.num_particles)
             .into_par_iter()
             .map(|i| {
@@ -194,6 +183,7 @@ impl Scene {
         for i in 0..self.num_particles {
             let pos = &mut self.pos[i];
             let vel = &mut self.vel[i];
+
             if pos.x < RADIUS {
                 pos.x = RADIUS;
                 vel.x = 0.;
