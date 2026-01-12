@@ -80,13 +80,11 @@ impl Scene {
     }
 
     fn update_grid(&mut self) {
-        let mut grid = SpatialHashGrid::new();
+        self.grid.clear();
 
         for (i, p) in self.pos.iter().enumerate() {
-            grid.entry(cell_coord(p)).or_default().push(i)
+            self.grid.entry(cell_coord(p)).or_default().push(i)
         }
-
-        self.grid = grid;
     }
 
     fn update_density(&mut self) {
