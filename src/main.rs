@@ -6,32 +6,13 @@ use crate::kernel::*;
 use macroquad::prelude::*;
 use rayon::prelude::*;
 
-static mut SEED: u64 = 0;
-
-fn rand_u32() -> u32 {
-    unsafe {
-        if SEED == 0 {
-            SEED = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos() as u64;
-        }
-
-        SEED ^= SEED << 13;
-        SEED ^= SEED >> 7;
-        SEED ^= SEED << 17;
-
-        SEED as u32
-    }
-}
-
 fn rand_f32() -> f32 {
-    rand_u32() as f32 / u32::MAX as f32
+    macroquad::rand::rand() as f32 / u32::MAX as f32
 }
 
 const PIXELS_PER_CM: f32 = 100.;
 
-const RADIUS: f32 = 0.05;
+const RADIUS: f32 = 0.07;
 const SPACE: f32 = RADIUS * 2.;
 
 // kernel size
@@ -50,7 +31,7 @@ const EPS: f32 = 0.2;
 
 const COEF_RESTITUTION: f32 = 0.9;
 
-const STEPS_PER_FRAME: usize = 30;
+const STEPS_PER_FRAME: usize = 10;
 const DT: f32 = 1. / (30. * STEPS_PER_FRAME as f32);
 
 #[inline]
