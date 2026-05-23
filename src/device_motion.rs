@@ -8,7 +8,7 @@ unsafe extern "C" {
 }
 
 pub fn get_acceleration() -> Vec2 {
-    let acc = {
+    {
         #[cfg(target_arch = "wasm32")]
         unsafe {
             vec2(-get_accel_x() as f32, get_accel_y() as f32)
@@ -18,7 +18,5 @@ pub fn get_acceleration() -> Vec2 {
         {
             vec2(0., 10.)
         }
-    };
-
-    acc
+    }
 }
