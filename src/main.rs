@@ -12,7 +12,7 @@ fn rand_f32() -> f32 {
 
 const PIXELS_PER_CM: f32 = 100.;
 
-const RADIUS: f32 = 0.07;
+const RADIUS: f32 = 0.9;
 const SPACE: f32 = RADIUS * 2.;
 
 // kernel size
