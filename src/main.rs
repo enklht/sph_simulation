@@ -12,7 +12,7 @@ fn rand_f32() -> f32 {
 
 const PIXELS_PER_CM: f32 = 100.;
 
-const RADIUS: f32 = 0.08;
+const RADIUS: f32 = 0.07;
 const SPACE: f32 = RADIUS * 2.;
 
 // kernel size
@@ -21,13 +21,13 @@ const H: f32 = RADIUS * 3.;
 // rest_density
 const RHO0: f32 = 1.;
 // mass
-const M: f32 = RHO0 / SPACE / SPACE;
+const M: f32 = RHO0 * SPACE * SPACE;
 // stiffness
-const K: f32 = 50.;
+const K: f32 = 100.;
 // viscosity
-const MU: f32 = 0.2;
+const MU: f32 = 0.1;
 // xsph strength
-const EPS: f32 = 0.2;
+const EPS: f32 = 0.5;
 
 const COEF_RESTITUTION: f32 = 0.9;
 
@@ -71,9 +71,6 @@ impl SpatialHashGrid {
         self.ends.fill(0);
 
         for p in pos {
-            if cell_idx(p, num_cols) >= self.ends.len() {
-                println!("{p:?}");
-            }
             self.ends[cell_idx(p, num_cols)] += 1;
         }
 
@@ -91,24 +88,28 @@ impl SpatialHashGrid {
         }
     }
 
-    fn query_neighbours<'a>(&'a self, pos: &Vec2) -> impl Iterator<Item = u32> + 'a {
+    fn query_neighbours(&self, pos: &Vec2, mut f: impl FnMut(usize)) {
         let cx = (pos.x / H).round() as isize;
         let cy = (pos.y / H).round() as isize;
 
-        (-1..=1).flat_map(move |dy| {
-            (-1..=1)
-                .filter_map(move |dx| {
-                    let ny: usize = (cy + dy).try_into().ok()?;
-                    let nx: usize = (cx + dx).try_into().ok()?;
-                    (ny < self.num_rows && nx < self.num_cols).then(|| {
-                        let c = ny * self.num_cols + nx;
-                        self.ids[self.starts[c] as usize..self.ends[c] as usize]
-                            .iter()
-                            .copied()
-                    })
-                })
-                .flatten()
-        })
+        for dy in -1..=1 {
+            let ny = cy + dy;
+            if ny < 0 || ny >= self.num_rows as isize {
+                continue;
+            }
+            let ny = ny as usize;
+            for dx in -1..=1 {
+                let nx = cx + dx;
+                if nx < 0 || nx >= self.num_cols as isize {
+                    continue;
+                }
+                let nx = nx as usize;
+                let c = ny * self.num_cols + nx;
+                for k in self.starts[c]..self.ends[c] {
+                    f(self.ids[k as usize] as usize)
+                }
+            }
+        }
     }
 }
 
@@ -120,6 +121,7 @@ struct Scene {
     force: Vec<Vec2>,
     rho: Vec<f32>,
     p: Vec<f32>,
+    corrections: Vec<Vec2>,
 }
 
 impl Scene {
@@ -153,24 +155,24 @@ impl Scene {
             force: vec![Vec2::ZERO; num_particles],
             rho: vec![RHO0; num_particles],
             p: vec![0.; num_particles],
+            corrections: vec![Vec2::ZERO; num_particles],
         }
     }
 
-    fn update_density(&mut self) {
-        self.rho.par_iter_mut().enumerate().for_each(|(i, rho)| {
-            *rho = 0.0;
-            for j in self.grid.query_neighbours(&self.pos[i]) {
-                let j = j as usize;
-                *rho += M * poly6(self.pos[i] - self.pos[j]);
-            }
-        });
-    }
+    fn update_density_pressure(&mut self) {
+        self.rho
+            .par_iter_mut()
+            .zip(self.p.par_iter_mut())
+            .enumerate()
+            .for_each(|(i, (rho, p))| {
+                *rho = 0.;
 
-    fn update_pressure(&mut self) {
-        for i in 0..self.num_particles {
-            self.p[i] = K * (self.rho[i] - RHO0);
-            // self.p[i] = B * ((self.rho[i] / RHO0).powi(7) - 1.)
-        }
+                self.grid.query_neighbours(&self.pos[i], |j| {
+                    *rho += M * poly6(self.pos[i] - self.pos[j]);
+                });
+
+                *p = K * (*rho - RHO0);
+            });
     }
 
     fn update_force(&mut self) {
@@ -179,41 +181,38 @@ impl Scene {
         self.force.par_iter_mut().enumerate().for_each(|(i, f)| {
             *f = self.rho[i] * gravity_accel;
 
-            for j in self.grid.query_neighbours(&self.pos[i]) {
-                let j = j as usize;
+            self.grid.query_neighbours(&self.pos[i], |j| {
                 if i != j {
+                    let r = self.pos[i] - self.pos[j];
                     // Pressure force
-                    *f += -M * (self.p[i] + self.p[j]) / (2. * self.rho[j])
-                        * grad_spiky(self.pos[i] - self.pos[j]);
+                    *f += -M * (self.p[i] + self.p[j]) / (2. * self.rho[j]) * grad_spiky(r);
 
                     // Viscosity force
-                    *f += MU * M * (self.vel[j] - self.vel[i]) / self.rho[j]
-                        * lap_visc(self.pos[i] - self.pos[j]);
+                    *f += -MU * M * r / self.rho[j] * lap_visc(r);
                 }
-            }
+            })
         });
     }
 
     fn apply_xsph(&mut self) {
-        let dv = (0..self.num_particles)
-            .into_par_iter()
-            .map(|i| {
-                let mut corr = Vec2::ZERO;
+        self.corrections
+            .par_iter_mut()
+            .enumerate()
+            .for_each(|(i, correction)| {
+                *correction = Vec2::ZERO;
 
-                for j in self.grid.query_neighbours(&self.pos[i]) {
-                    let j = j as usize;
+                self.grid.query_neighbours(&self.pos[i], |j| {
                     if i != j {
                         let r = self.pos[i] - self.pos[j];
-                        corr += M * (self.vel[j] - self.vel[i]) / self.rho[j] * poly6(r);
+                        *correction += M * (self.vel[j] - self.vel[i]) / self.rho[j] * poly6(r);
                     }
-                }
+                });
 
-                EPS * corr
-            })
-            .collect::<Vec<_>>();
+                *correction *= EPS;
+            });
 
         for i in 0..self.num_particles {
-            self.vel[i] += dv[i];
+            self.vel[i] += self.corrections[i];
         }
     }
 
@@ -299,8 +298,7 @@ async fn main() {
 
             scene.grid.rebuild(&scene.pos);
 
-            scene.update_density();
-            scene.update_pressure();
+            scene.update_density_pressure();
             scene.update_force();
 
             for i in 0..scene.num_particles {
