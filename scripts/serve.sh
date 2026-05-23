@@ -4,7 +4,7 @@ set -e
 echo "Building and serving locally for testing..."
 
 # Build first
-./build.sh
+./scripts/build.sh
 
 # Serve the dist directory
 echo "Starting local server..."

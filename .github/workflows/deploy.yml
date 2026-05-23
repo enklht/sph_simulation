@@ -32,10 +32,12 @@ jobs:
           rustup target add wasm32-unknown-unknown
           # Build project for WASM target
           cargo build --target wasm32-unknown-unknown --release
+          # Create dist directory
+          mkdir -p dist
           # Copy built WASM file to dist
           cp target/wasm32-unknown-unknown/release/sph_simulation.wasm dist/
-          # Copy index.html for dist
-          cp index.html dist/index.html
+          # Copy static assets to dist
+          cp -r static/* dist/
 
       - name: Setup Pages
         uses: actions/configure-pages@v4

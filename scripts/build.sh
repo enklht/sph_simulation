@@ -12,11 +12,12 @@ cargo build --target wasm32-unknown-unknown --release
 
 # Copy built WASM file to dist
 echo "Copying WASM file to dist/"
+mkdir -p dist
 cp target/wasm32-unknown-unknown/release/sph_simulation.wasm dist/
 
-# Copy and update index.html for dist
-echo "Updating index.html for deployment..."
-cp index.html dist/index.html
+# Copy static assets to dist
+echo "Copying static assets to dist/"
+cp -r static/* dist/
 
 echo "✅ Build complete! Files ready in dist/:"
 ls -la dist/

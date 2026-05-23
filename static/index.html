@@ -1,43 +1,41 @@
+<!doctype html>
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <title>SPH Fluid Simulation</title>
-    <style>
-      html,
-      body,
-      canvas {
-        margin: 0px;
-        padding: 0px;
-        width: 100%;
-        height: 100%;
-        overflow: hidden;
-        position: absolute;
-        background: black;
-        z-index: 0;
-      }
-      #start {
-        position: absolute;
-        z-index: 10;
-        top: 40%;
-        left: 50%;
-        transform: translateX(-50%);
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, viewport-fit=cover"
+    />
 
-        padding: 12px 32px;
-        border: none;
-        border-radius: 8px;
-        background: #808080;
-        color: #fff;
-        font-size: 1.1rem;
-        cursor: pointer;
-      }
-    </style>
+    <title>SPH Fluid Simulation</title>
+
+    <link rel="stylesheet" href="style.css" />
   </head>
 
   <body>
-    <button id="start">Tap to Start</button>
     <canvas id="glcanvas" tabindex="1"></canvas>
-    <!-- Minified and statically hosted version of https://github.com/not-fl3/macroquad/blob/master/js/mq_js_bundle.js -->
+
+    <div class="header">SPH Fluid Demo</div>
+
+    <div class="overlay" id="overlay">
+      <div class="card">
+        <h1>Fluid Simulation</h1>
+
+        <p>Smoothed Particle Hydrodynamics running in WebAssembly.</p>
+
+        <div class="notice">
+          High-intensity demo. It may increase CPU usage, battery drain, and
+          device temperature.
+        </div>
+
+        <button id="start">Start Simulation</button>
+
+        <div class="footer">Motion control enabled on supported devices</div>
+      </div>
+    </div>
+
     <script src="https://not-fl3.github.io/miniquad-samples/mq_js_bundle.js"></script>
+
     <script>
       let accel_x = 0.0;
       let accel_y = 10.0;
@@ -51,7 +49,7 @@
       }
 
       async function start() {
-        document.getElementById("start").remove();
+        document.getElementById("overlay").remove();
 
         // iOS permission
         if (
