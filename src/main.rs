@@ -10,13 +10,13 @@ use rayon::prelude::*;
 
 const PIXELS_PER_CM: f32 = 100.;
 
-const RADIUS: f32 = 0.07;
+const RADIUS: f32 = 0.06;
 const SPACE: f32 = RADIUS * 2.;
 // kernel size
 const H: f32 = RADIUS * 3.;
 
 // rest_density
-const RHO0: f32 = 1.;
+const RHO0: f32 = 0.1;
 // mass
 const M: f32 = RHO0 * SPACE * SPACE;
 // stiffness
@@ -24,12 +24,57 @@ const K: f32 = 100.;
 // viscosity
 const MU: f32 = 0.1;
 // xsph strength
-const EPS: f32 = 0.1;
+const EPS: f32 = 0.2;
 
-const COEF_RESTITUTION: f32 = 0.5;
+const COEF_RESTITUTION: f32 = 0.1;
 
 const STEPS_PER_FRAME: usize = 10;
 const DT: f32 = 1. / (30. * STEPS_PER_FRAME as f32);
+
+struct Buffers {
+    pos: Vec<Vec2>,
+    vel: Vec<Vec2>,
+    p: Vec<f32>,
+    force: Vec<Vec2>,
+    corrections: Vec<Vec2>,
+}
+
+impl Buffers {
+    fn new(n: usize) -> Self {
+        Self {
+            pos: vec![Vec2::ZERO; n],
+            vel: vec![Vec2::ZERO; n],
+            p: vec![0.; n],
+            force: vec![Vec2::ZERO; n],
+            corrections: vec![Vec2::ZERO; n],
+        }
+    }
+
+    fn reorder(
+        &mut self,
+        ids: &[u32],
+        pos: &mut Vec<Vec2>,
+        vel: &mut Vec<Vec2>,
+        p: &mut Vec<f32>,
+        force: &mut Vec<Vec2>,
+        corrections: &mut Vec<Vec2>,
+    ) {
+        for (idx, &id) in ids.iter().enumerate() {
+            let i = id as usize;
+            self.pos[idx] = pos[i];
+            self.vel[idx] = vel[i];
+            self.p[idx] = p[i];
+            self.force[idx] = force[i];
+            self.corrections[idx] = corrections[i];
+        }
+
+        std::mem::swap(pos, &mut self.pos);
+        std::mem::swap(vel, &mut self.vel);
+        std::mem::swap(p, &mut self.p);
+        std::mem::swap(force, &mut self.force);
+        std::mem::swap(corrections, &mut self.corrections);
+    }
+}
 
 struct Scene {
     num_particles: usize,
@@ -40,6 +85,7 @@ struct Scene {
     rho: Vec<f32>,
     p: Vec<f32>,
     corrections: Vec<Vec2>,
+    buffers: Buffers,
 }
 
 impl Scene {
@@ -74,6 +120,7 @@ impl Scene {
             p: vec![0.; num_particles],
             force: vec![Vec2::ZERO; num_particles],
             corrections: vec![Vec2::ZERO; num_particles],
+            buffers: Buffers::new(num_particles),
         }
     }
 
@@ -89,7 +136,7 @@ impl Scene {
                     *rho += M * poly6(self.pos[i] - self.pos[j]);
                 });
 
-                *p = K * (*rho - RHO0).clamp(1e-3, 1e3);
+                *p = K * (*rho - RHO0).clamp(1e-6, 1e6);
             });
     }
 
@@ -168,6 +215,18 @@ impl Scene {
             });
     }
 
+    fn reorder_particles(&mut self) {
+        // rho will be reset on write soon after this operation, so we dont have to reorder it
+        self.buffers.reorder(
+            &self.grid.ids,
+            &mut self.pos,
+            &mut self.vel,
+            &mut self.p,
+            &mut self.force,
+            &mut self.corrections,
+        );
+    }
+
     fn render(&self) {
         const BACKGROUND_COLOR: Color = Color::new(0.2, 0.2, 0.2, 1.0);
         const WATER_COLOR: Color = Color::new(0.3, 0.85, 0.95, 0.9);
@@ -223,6 +282,7 @@ async fn main() {
             scene.update_pos_with_collision(w, h);
 
             scene.grid.update(&scene.pos);
+            scene.reorder_particles();
 
             scene.update_density_pressure();
             scene.update_force();
