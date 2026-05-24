@@ -9,7 +9,8 @@ pub fn poly6(x: Vec2) -> f32 {
 
     let r2 = x.length_squared();
     if r2 < H.powi(2) {
-        4. / (PI * H8) * (H2 - r2).powi(3)
+        let q = H2 - r2;
+        4. / (PI * H8) * q * q * q
     } else {
         0.
     }
@@ -22,7 +23,8 @@ pub fn grad_poly6(x: Vec2) -> Vec2 {
 
     let r2 = x.length_squared();
     if r2 < H.powi(2) {
-        -24. / (PI * H8) * (H2 - r2).powi(2) * x
+        let q = H2 - r2;
+        -24. / (PI * H8) * q * q * x
     } else {
         Vec2::ZERO
     }
@@ -34,7 +36,8 @@ pub fn spiky(x: Vec2) -> f32 {
 
     let r = x.length();
     if r < H {
-        10. / (PI * H5) * (H - r).powi(3)
+        let q = H - r;
+        10. / (PI * H5) * q * q * q
     } else {
         0.
     }
@@ -46,7 +49,8 @@ pub fn grad_spiky(x: Vec2) -> Vec2 {
 
     let r = x.length();
     if 0. < r && r < H {
-        -30. / (PI * H5) * (H - r).powi(2) * (x / r)
+        let q = H - r;
+        -30. / (PI * H5) * q * q * (x / r)
     } else {
         Vec2::ZERO
     }

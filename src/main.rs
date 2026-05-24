@@ -1,20 +1,17 @@
 mod device_motion;
+mod grid;
 mod kernel;
 
 use crate::device_motion::get_acceleration;
+use crate::grid::SpatialHashGrid;
 use crate::kernel::*;
 use macroquad::prelude::*;
 use rayon::prelude::*;
-
-fn rand_f32() -> f32 {
-    macroquad::rand::rand() as f32 / u32::MAX as f32
-}
 
 const PIXELS_PER_CM: f32 = 100.;
 
 const RADIUS: f32 = 0.07;
 const SPACE: f32 = RADIUS * 2.;
-
 // kernel size
 const H: f32 = RADIUS * 3.;
 
@@ -27,91 +24,12 @@ const K: f32 = 100.;
 // viscosity
 const MU: f32 = 0.1;
 // xsph strength
-const EPS: f32 = 0.5;
+const EPS: f32 = 0.1;
 
-const COEF_RESTITUTION: f32 = 0.9;
+const COEF_RESTITUTION: f32 = 0.01;
 
 const STEPS_PER_FRAME: usize = 10;
 const DT: f32 = 1. / (30. * STEPS_PER_FRAME as f32);
-
-#[inline]
-fn cell_idx(pos: &Vec2, num_cols: usize) -> usize {
-    let cx = (pos.x / H).round() as usize;
-    let cy = (pos.y / H).round() as usize;
-    cy * num_cols + cx
-}
-
-struct SpatialHashGrid {
-    num_cols: usize,
-    num_rows: usize,
-    starts: Vec<u32>,
-    ends: Vec<u32>,
-    ids: Vec<u32>,
-}
-
-impl SpatialHashGrid {
-    fn new(w: f32, h: f32, num_particles: usize) -> Self {
-        let num_cols = (w / H).ceil() as usize + 1;
-        let num_rows = (h / H).ceil() as usize + 1;
-
-        let num_cells = num_cols * num_rows;
-
-        Self {
-            num_cols,
-            num_rows,
-            starts: vec![0; num_cells],
-            ends: vec![0; num_cells],
-            ids: vec![0; num_particles],
-        }
-    }
-
-    fn rebuild(&mut self, pos: &[Vec2]) {
-        let num_cols = self.num_cols;
-
-        self.ends.fill(0);
-
-        for p in pos {
-            self.ends[cell_idx(p, num_cols)] += 1;
-        }
-
-        let mut total = 0;
-        for i in 0..self.starts.len() {
-            self.starts[i] = total;
-            total += self.ends[i];
-            self.ends[i] = self.starts[i];
-        }
-
-        for (i, p) in pos.iter().enumerate() {
-            let c = cell_idx(p, num_cols);
-            self.ids[self.ends[c] as usize] = i as u32;
-            self.ends[c] += 1;
-        }
-    }
-
-    fn query_neighbours(&self, pos: &Vec2, mut f: impl FnMut(usize)) {
-        let cx = (pos.x / H).round() as isize;
-        let cy = (pos.y / H).round() as isize;
-
-        for dy in -1..=1 {
-            let ny = cy + dy;
-            if ny < 0 || ny >= self.num_rows as isize {
-                continue;
-            }
-            let ny = ny as usize;
-            for dx in -1..=1 {
-                let nx = cx + dx;
-                if nx < 0 || nx >= self.num_cols as isize {
-                    continue;
-                }
-                let nx = nx as usize;
-                let c = ny * self.num_cols + nx;
-                for k in self.starts[c]..self.ends[c] {
-                    f(self.ids[k as usize] as usize)
-                }
-            }
-        }
-    }
-}
 
 struct Scene {
     num_particles: usize,
@@ -126,8 +44,8 @@ struct Scene {
 
 impl Scene {
     fn new(w: f32, h: f32) -> Scene {
-        let cols = ((w - 2.0 * SPACE) / SPACE).floor() as usize;
-        let rows = ((h - 2.0 * SPACE) / 3.0 / SPACE).floor() as usize;
+        let cols = ((w - 2.0 * SPACE) / 3.0 / SPACE).floor() as usize;
+        let rows = ((h - 2.0 * SPACE) / SPACE).floor() as usize;
 
         let num_particles = cols * rows;
 
@@ -152,9 +70,9 @@ impl Scene {
             grid: SpatialHashGrid::new(w, h, num_particles),
             pos,
             vel: vec![Vec2::ZERO; num_particles],
-            force: vec![Vec2::ZERO; num_particles],
             rho: vec![RHO0; num_particles],
             p: vec![0.; num_particles],
+            force: vec![Vec2::ZERO; num_particles],
             corrections: vec![Vec2::ZERO; num_particles],
         }
     }
@@ -167,11 +85,11 @@ impl Scene {
             .for_each(|(i, (rho, p))| {
                 *rho = 0.;
 
-                self.grid.query_neighbours(&self.pos[i], |j| {
+                for &j in &self.grid.neighbours[i] {
                     *rho += M * poly6(self.pos[i] - self.pos[j]);
-                });
+                }
 
-                *p = K * (*rho - RHO0);
+                *p = K * (*rho - RHO0).clamp(1e-3, 1e3);
             });
     }
 
@@ -181,16 +99,22 @@ impl Scene {
         self.force.par_iter_mut().enumerate().for_each(|(i, f)| {
             *f = self.rho[i] * gravity_accel;
 
-            self.grid.query_neighbours(&self.pos[i], |j| {
+            for &j in &self.grid.neighbours[i] {
                 if i != j {
                     let r = self.pos[i] - self.pos[j];
                     // Pressure force
                     *f += -M * (self.p[i] + self.p[j]) / (2. * self.rho[j]) * grad_spiky(r);
 
                     // Viscosity force
-                    *f += -MU * M * r / self.rho[j] * lap_visc(r);
+                    *f += -MU * M * (self.vel[i] - self.vel[j]) / self.rho[j] * lap_visc(r);
                 }
-            })
+            }
+        });
+    }
+
+    fn update_vel(&mut self) {
+        self.vel.par_iter_mut().enumerate().for_each(|(i, v)| {
+            *v += self.force[i] / self.rho[i] * DT;
         });
     }
 
@@ -201,45 +125,47 @@ impl Scene {
             .for_each(|(i, correction)| {
                 *correction = Vec2::ZERO;
 
-                self.grid.query_neighbours(&self.pos[i], |j| {
+                for &j in &self.grid.neighbours[i] {
                     if i != j {
                         let r = self.pos[i] - self.pos[j];
                         *correction += M * (self.vel[j] - self.vel[i]) / self.rho[j] * poly6(r);
                     }
-                });
-
+                }
                 *correction *= EPS;
             });
 
-        for i in 0..self.num_particles {
-            self.vel[i] += self.corrections[i];
-        }
+        self.vel.par_iter_mut().enumerate().for_each(|(i, v)| {
+            *v += self.corrections[i];
+        });
     }
 
-    fn handle_wall_collision(&mut self, w: f32, h: f32) {
-        for i in 0..self.num_particles {
-            let pos = &mut self.pos[i];
-            let vel = &mut self.vel[i];
+    fn update_pos_with_collision(&mut self, w: f32, h: f32) {
+        self.pos
+            .par_iter_mut()
+            .zip(self.vel.par_iter_mut())
+            .enumerate()
+            .for_each(|(i, (pos, vel))| {
+                const EPSILON: f32 = 1e-5;
 
-            let jitter = rand_f32() * 0.001;
+                *pos += *vel * DT;
 
-            if pos.x < RADIUS {
-                pos.x = RADIUS + RADIUS * jitter;
-                vel.x *= -COEF_RESTITUTION;
-            }
-            if pos.x > w - RADIUS {
-                pos.x = w - RADIUS - RADIUS * jitter;
-                vel.x *= -COEF_RESTITUTION;
-            }
-            if pos.y < RADIUS {
-                pos.y = RADIUS + RADIUS * jitter;
-                vel.y *= -COEF_RESTITUTION;
-            }
-            if pos.y > h - RADIUS {
-                pos.y = h - RADIUS - RADIUS * jitter;
-                vel.y *= -COEF_RESTITUTION;
-            }
-        }
+                if pos.x < RADIUS {
+                    pos.x = RADIUS + EPSILON;
+                    vel.x = vel.x.abs() * COEF_RESTITUTION;
+                }
+                if pos.x > w - RADIUS {
+                    pos.x = w - RADIUS - EPSILON;
+                    vel.x = -vel.x.abs() * COEF_RESTITUTION;
+                }
+                if pos.y < RADIUS {
+                    pos.y = RADIUS + EPSILON;
+                    vel.y = vel.y.abs() * COEF_RESTITUTION;
+                }
+                if pos.y > h - RADIUS {
+                    pos.y = h - RADIUS - EPSILON;
+                    vel.y = -vel.y.abs() * COEF_RESTITUTION;
+                }
+            });
     }
 
     fn render(&self) {
@@ -258,6 +184,8 @@ impl Scene {
 fn window_conf() -> Conf {
     Conf {
         window_title: "SPH Fluid Simulation".to_string(),
+        window_width: 1920,
+        window_height: 1280,
         platform: miniquad::conf::Platform {
             swap_interval: Some(2), // target fps = 30
             ..Default::default()
@@ -272,7 +200,6 @@ async fn main() {
     let mut h_px = screen_height();
     let mut w = w_px / PIXELS_PER_CM;
     let mut h = h_px / PIXELS_PER_CM;
-    println!("{}, {}", w, h);
 
     let mut scene = Scene::new(w, h);
 
@@ -289,23 +216,16 @@ async fn main() {
         }
 
         for _ in 0..STEPS_PER_FRAME {
-            for i in 0..scene.num_particles {
-                scene.vel[i] += scene.force[i] / scene.rho[i] * DT / 2.;
-                scene.pos[i] += scene.vel[i] * DT;
-            }
+            scene.update_vel();
 
-            scene.handle_wall_collision(w, h);
+            scene.apply_xsph();
 
-            scene.grid.rebuild(&scene.pos);
+            scene.update_pos_with_collision(w, h);
+
+            scene.grid.update(&scene.pos);
 
             scene.update_density_pressure();
             scene.update_force();
-
-            for i in 0..scene.num_particles {
-                scene.vel[i] += scene.force[i] / scene.rho[i] * DT / 2.;
-            }
-
-            scene.apply_xsph();
         }
 
         scene.render();
