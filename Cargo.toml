@@ -4,12 +4,12 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-macroquad = "0.4.14"
-rayon = "1.8"
+macroquad = "0.4.15"
+rayon = "1.12.0"
 
 [profile.release]
-opt-level = "z"   # Optimize for size (use "s" if z is too aggressive)
-lto = true        # Link-time optimization
-codegen-units = 1 # Better optimization, smaller output
-panic = "abort"   # Remove unwinding machinery
-strip = true      # Strip symbols (Rust 1.66+)
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

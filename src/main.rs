@@ -26,7 +26,7 @@ const MU: f32 = 0.1;
 // xsph strength
 const EPS: f32 = 0.1;
 
-const COEF_RESTITUTION: f32 = 0.01;
+const COEF_RESTITUTION: f32 = 0.5;
 
 const STEPS_PER_FRAME: usize = 10;
 const DT: f32 = 1. / (30. * STEPS_PER_FRAME as f32);
@@ -85,9 +85,9 @@ impl Scene {
             .for_each(|(i, (rho, p))| {
                 *rho = 0.;
 
-                for &j in &self.grid.neighbours[i] {
+                self.grid.for_each_neighbour(i, |j| {
                     *rho += M * poly6(self.pos[i] - self.pos[j]);
-                }
+                });
 
                 *p = K * (*rho - RHO0).clamp(1e-3, 1e3);
             });
@@ -99,7 +99,7 @@ impl Scene {
         self.force.par_iter_mut().enumerate().for_each(|(i, f)| {
             *f = self.rho[i] * gravity_accel;
 
-            for &j in &self.grid.neighbours[i] {
+            self.grid.for_each_neighbour(i, |j| {
                 if i != j {
                     let r = self.pos[i] - self.pos[j];
                     // Pressure force
@@ -108,7 +108,7 @@ impl Scene {
                     // Viscosity force
                     *f += -MU * M * (self.vel[i] - self.vel[j]) / self.rho[j] * lap_visc(r);
                 }
-            }
+            });
         });
     }
 
@@ -125,12 +125,12 @@ impl Scene {
             .for_each(|(i, correction)| {
                 *correction = Vec2::ZERO;
 
-                for &j in &self.grid.neighbours[i] {
+                self.grid.for_each_neighbour(i, |j| {
                     if i != j {
                         let r = self.pos[i] - self.pos[j];
                         *correction += M * (self.vel[j] - self.vel[i]) / self.rho[j] * poly6(r);
                     }
-                }
+                });
                 *correction *= EPS;
             });
 
@@ -144,7 +144,7 @@ impl Scene {
             .par_iter_mut()
             .zip(self.vel.par_iter_mut())
             .enumerate()
-            .for_each(|(i, (pos, vel))| {
+            .for_each(|(_i, (pos, vel))| {
                 const EPSILON: f32 = 1e-5;
 
                 *pos += *vel * DT;

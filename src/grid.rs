@@ -1,14 +1,13 @@
 use super::*;
 
 pub struct SpatialHashGrid {
-    num_cols: u32,
-    num_rows: u32,
-    starts: Vec<u32>,
-    ends: Vec<u32>,
-    ids: Vec<u32>,
-    cxs: Vec<i32>,
-    cys: Vec<i32>,
-    pub neighbours: Vec<Vec<usize>>,
+    pub num_cols: u32,
+    pub num_rows: u32,
+    pub starts: Vec<u32>,
+    pub ends: Vec<u32>,
+    pub ids: Vec<u32>,
+    pub cxs: Vec<i32>,
+    pub cys: Vec<i32>,
 }
 
 impl SpatialHashGrid {
@@ -26,7 +25,6 @@ impl SpatialHashGrid {
             ids: vec![0; num_particles],
             cxs: vec![0; num_particles],
             cys: vec![0; num_particles],
-            neighbours: vec![vec![]; num_particles],
         }
     }
 
@@ -55,32 +53,30 @@ impl SpatialHashGrid {
             self.ids[self.ends[c] as usize] = i as u32;
             self.ends[c] += 1;
         }
+    }
 
-        self.neighbours
-            .par_iter_mut()
-            .enumerate()
-            .for_each(|(i, neighbours)| {
-                neighbours.clear();
+    pub fn for_each_neighbour<F>(&self, i: usize, mut f: F)
+    where
+        F: FnMut(usize),
+    {
+        let cx = self.cxs[i];
+        let cy = self.cys[i];
 
-                let cx = self.cxs[i];
-                let cy = self.cys[i];
-
-                for dy in -1..=1 {
-                    let ny = cy + dy;
-                    if ny < 0 || ny >= self.num_rows as i32 {
-                        continue;
-                    }
-                    for dx in -1..=1 {
-                        let nx = cx + dx;
-                        if nx < 0 || nx >= self.num_cols as i32 {
-                            continue;
-                        }
-                        let c = ny * self.num_cols as i32 + nx;
-                        for k in self.starts[c as usize]..self.ends[c as usize] {
-                            neighbours.push(self.ids[k as usize] as usize)
-                        }
-                    }
+        for dy in -1..=1 {
+            let ny = cy + dy;
+            if ny < 0 || ny >= self.num_rows as i32 {
+                continue;
+            }
+            for dx in -1..=1 {
+                let nx = cx + dx;
+                if nx < 0 || nx >= self.num_cols as i32 {
+                    continue;
                 }
-            });
+                let c = (ny * self.num_cols as i32 + nx) as usize;
+                for k in self.starts[c]..self.ends[c] {
+                    f(self.ids[k as usize] as usize);
+                }
+            }
+        }
     }
 }
